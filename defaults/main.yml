@@ -1,0 +1,4 @@
+---
+# defaults file for ansible-sshportal
+
+setup_sshportal: false

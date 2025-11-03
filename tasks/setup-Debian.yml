@@ -1,0 +1,75 @@
+---
+- assert:
+    that:
+    - "shportal_admin_invite_token is defined"
+    msg: 'please define shportal_admin_invite_token'
+
+- name: 'sshportal: Install python'
+  ansible.builtin.apt:
+    name: '{{ item }}'
+    state: present
+  with_items:
+    - python3
+    - python3-pip
+
+- name: 'sshportal: Install docker package'
+  ansible.builtin.pip:
+    name: docker
+    break_system_packages: true
+
+- name: 'sshportal: create docker volume'
+  docker_volume:
+    name: '{{ item }}'
+  with_items:
+  - sshportal__log
+  - sshportal__var_lib_sshportal
+  register: 'register_docker_volume_sshportal'
+
+
+- name: 'sshportal: deploy container'
+  docker_container:
+    name: sshportal
+    hostname: '{{ inventory_hostname }}'
+    image: moul/sshportal:latest
+    env:
+      SSHPORTAL_DEFAULT_ADMIN_INVITE_TOKEN: '{{ shportal_admin_invite_token }}'
+      SSHPORTAL_DB_DRIVER: 'sqlite3'
+      SSHPORTAL_DATABASE_URL: '/var/lib/sshportal/sshportal.db'
+    ports:
+    - 2222:2222
+    volumes:
+    - sshportal__log:/log
+    - sshportal__var_lib_sshportal:/var/lib/sshportal/
+    log_driver: syslog
+    log_options:
+      tag: docker_sshportal
+    restart_policy: 'unless-stopped'
+    pull: False
+  register: 'register_docker_container_sshportal'
+
+
+- name: 'sshportal: wrapper script /usr/local/bin/sshportal'
+  copy:
+    dest: '/usr/local/bin/sshportal'
+    mode: '0750'
+    content: |
+      #!/bin/bash
+      ssh -l admin -p 2222 127.0.0.1 ${@}
+
+- name: 'sshportal: wait for sshportal'
+  wait_for:
+    port: '2222'
+    host: '127.0.0.1'
+    search_regex: 'sshportal'
+    delay: 2
+
+- name: 'sshportal: Generate an OpenSSH keypair'
+  community.crypto.openssh_keypair:
+    path: /root/.ssh/id_ed25519_sshportal_admin
+    type: ed25519
+
+- name: 'sshportal: init : auto invite admin ssh key'
+  command: 'ssh -l invite:{{ shportal_admin_invite_token }} -p 2222 127.0.0.1 -o "StrictHostKeyChecking=no"'
+  when:
+  - register_docker_volume_sshportal.changed
+  - register_docker_container_sshportal.changed

@@ -1,0 +1,90 @@
+---
+- import_tasks: setup-Debian.yml
+  when: 
+    - ansible_os_family == 'Debian'
+    - setup_sshportal | bool
+
+- name: 'sshportal: install python3-pip'
+  ansible.builtin.apt:
+    name: python3-pip
+    state: present
+  when: ansible_os_family == 'Debian'
+
+- name: 'sshportal: install cryptography package'
+  ansible.builtin.pip:
+    name: cryptography
+    break_system_packages: true
+
+- name: 'sshportal: add management script'
+  template:
+    src: sshportalmgmt.py
+    dest: /usr/local/bin/sshportalmgmt.py
+    owner: root
+    group: root
+    mode: 0750
+
+- name: "sshportal : Manage host groups"
+  ansible.builtin.command: '/usr/bin/python3 /usr/local/bin/sshportalmgmt.py managehostgroups --groups "{{ sshportal_host_groups | join(",") }}"'
+  register: result
+  changed_when: '"Host groups changed" in result.stdout'
+
+- name: "sshportal : Manage user groups"
+  ansible.builtin.command: '/usr/bin/python3 /usr/local/bin/sshportalmgmt.py manageusergroups --groups "{{ sshportal_user_groups | join(",") }}"'
+  register: result
+  changed_when: '"User groups changed" in result.stdout'
+
+- name: "sshportal : Manage keys"
+  ansible.builtin.command: '/usr/bin/python3 /usr/local/bin/sshportalmgmt.py managekeys --keys "{{ sshportal_host_keys | join(",") }}"'
+  register: result
+  changed_when: '"Keys changed" in result.stdout'
+
+- name: "sshportal : Manage hosts"
+  ansible.builtin.command: >-
+    /usr/bin/python3 /usr/local/bin/sshportalmgmt.py managehosts 
+    --hosts "{{ sshportal_hosts | map(attribute='name') | zip(sshportal_hosts | map(attribute='url'), sshportal_hosts | map(attribute='key')) | map('join', ':::') | join('|||') }}"
+  register: result
+  changed_when: '"Hosts changed" in result.stdout'
+
+- name: "sshportal : Manage host group assignments"
+  ansible.builtin.command: >-
+    /usr/bin/python3 /usr/local/bin/sshportalmgmt.py managehostgroupassignments 
+    --assignments "{% for host in sshportal_hosts %}{% if host.groups is defined %}{% for group in host.groups %}{{ host.name }}:::{{ group }}{% if not loop.last %}|||{% endif %}{% endfor %}{% if not loop.last %}|||{% endif %}{% endif %}{% endfor %}"
+  register: result
+  changed_when: '"Host group assignments changed" in result.stdout'
+
+- name: "sshportal : Manage users"
+  ansible.builtin.command: >-
+    /usr/bin/python3 /usr/local/bin/sshportalmgmt.py manageusers 
+    --users "{% for user in sshportal_users %}{{ user.name }}:::{{ user.email }}:::{{ user.token | default('') }}{% if not loop.last %}|||{% endif %}{% endfor %}"
+  register: result
+  changed_when: '"Users changed" in result.stdout'
+
+- name: "sshportal : Manage user group assignments"
+  ansible.builtin.command: >-
+    /usr/bin/python3 /usr/local/bin/sshportalmgmt.py manageusergroupassignments 
+    --assignments "{% for user in sshportal_users %}{% if user.groups is defined %}{% for group in user.groups %}{{ user.name }}:::{{ group }}{% if not loop.last %}|||{% endif %}{% endfor %}{% if not loop.last %}|||{% endif %}{% endif %}{% endfor %}"
+  register: result
+  changed_when: '"User group assignments changed" in result.stdout'
+
+- name: "sshportal : Manage acls"
+  ansible.builtin.command: >-
+    /usr/bin/python3 /usr/local/bin/sshportalmgmt.py manageacls 
+    --acls "{{ sshportal_acls | map(attribute='name') | zip(sshportal_acls | map(attribute='host_group'), sshportal_acls | map(attribute='user_group'), sshportal_acls | map(attribute='action')) | map('join', ':::') | join('|||') }}"
+  register: result
+  changed_when: '"ACLs changed" in result.stdout'
+
+- name: "sshportal : Manage user SSH keys"
+  ansible.builtin.command: '/usr/bin/python3 /usr/local/bin/sshportalmgmt.py manageuserkeys --user {{ item.name }} --keys "{{ item.ssh_pub_keys | default([]) | join(",") }}"'
+  register: result
+  changed_when: '"Keys changed" in result.stdout'
+  with_items:
+    - '{{ sshportal_users }}'
+
+- name: "sshportal : List generated SSH host keys"
+  ansible.builtin.command: '/usr/bin/python3 /usr/local/bin/sshportalmgmt.py listkeys'
+  register: sshportal_keys_list
+  changed_when: false
+
+- name: "sshportal : Display generated SSH host keys"
+  ansible.builtin.debug:
+    msg: "{{ sshportal_keys_list.stdout_lines }}"
