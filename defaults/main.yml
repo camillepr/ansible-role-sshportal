@@ -2,3 +2,4 @@
 # defaults file for ansible-sshportal
 
 setup_sshportal: false
+sshportal_dbpath: "/var/lib/docker/volumes/sshportal__var_lib_sshportal/_data/sshportal.db"
