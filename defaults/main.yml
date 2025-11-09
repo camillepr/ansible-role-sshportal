@@ -3,3 +3,8 @@
 
 setup_sshportal: false
 sshportal_dbpath: "/var/lib/docker/volumes/sshportal__var_lib_sshportal/_data/sshportal.db"
+
+# Protected users that cannot be managed by the role
+sshportal_protected_users:
+  - admin
+  - sshportal

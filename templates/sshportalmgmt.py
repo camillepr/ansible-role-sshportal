@@ -1,12 +1,62 @@
 #!/usr/bin/python3
 import datetime
+from datetime import timezone
 import sqlite3
 import argparse
 import sys
+import base64
+import struct
+import socket
 from contextlib import contextmanager
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 import hashlib
+
+# Global variable to store the Ansible controller hostname
+ANSIBLE_CONTROLLER_HOST = None
+
+# Global variable to store protected users list
+PROTECTED_USERS = {'admin', 'sshportal'}  # Default protected users
+
+def get_utc_now():
+    """Get current UTC time with timezone information."""
+    return datetime.datetime.now(timezone.utc)
+
+def get_ansible_comment():
+    """Generate a comment with the Ansible controller hostname."""
+    if ANSIBLE_CONTROLLER_HOST:
+        return f"ansible from {ANSIBLE_CONTROLLER_HOST}"
+    else:
+        # Fallback to local hostname if not set
+        hostname = socket.gethostname()
+        return f"ansible from {hostname}"
+
+def parse_openssh_pubkey_to_wire_format(pubkey_string):
+    """
+    Convert an OpenSSH public key string to SSH wire format (binary blob).
+    
+    Args:
+        pubkey_string: SSH public key in OpenSSH format (e.g., "ssh-ed25519 AAAAC3...")
+    
+    Returns:
+        bytes: SSH wire format as used in the 'key' blob field
+    """
+    try:
+        # Split the key string
+        parts = pubkey_string.strip().split()
+        if len(parts) < 2:
+            raise ValueError("Invalid SSH public key format")
+        
+        # Get the base64-encoded key data (second part)
+        key_data_b64 = parts[1]
+        
+        # Decode from base64 to get the wire format
+        wire_format = base64.b64decode(key_data_b64)
+        
+        return wire_format
+    except Exception as e:
+        print(f"Error parsing SSH public key: {e}")
+        return None
 
 @contextmanager
 def get_db_connection(path):
@@ -109,7 +159,7 @@ def addAcl(path, hostgroup, usergroup, action, comment):
                               ('created_at', 'updated_at', 'action', 'weight', 'comment') 
                               VALUES (?, ?, ?, ?, ?);"""
             
-            data_tuple = (datetime.datetime.now(), datetime.datetime.now(), action, 0, comment)
+            data_tuple = (get_utc_now(), get_utc_now(), action, 0, get_ansible_comment())
             cursor.execute(sqlite_insert_acl, data_tuple)
             
             # Get the newly created ACL ID
@@ -219,7 +269,7 @@ def manageAcls(path, acls_data):
                                       ('created_at', 'updated_at', 'action', 'weight', 'comment') 
                                       VALUES (?, ?, ?, ?, ?);"""
                     
-                    data_tuple = (datetime.datetime.now(), datetime.datetime.now(), action, 0, name)
+                    data_tuple = (get_utc_now(), get_utc_now(), action, 0, get_ansible_comment())
                     cursor.execute(sqlite_insert_acl, data_tuple)
                     
                     # Get the newly created ACL ID
@@ -253,11 +303,11 @@ def manageAcls(path, acls_data):
                         print(f"Updating ACL: {name}")
                         acl_id = existing['id']
                         
-                        # Update the action field
+                        # Update the action field and comment
                         sqlite_update = """UPDATE 'acls' 
-                                         SET 'updated_at' = ?, 'action' = ?
+                                         SET 'updated_at' = ?, 'action' = ?, 'comment' = ?
                                          WHERE id = ?;"""
-                        cursor.execute(sqlite_update, (datetime.datetime.now(), action, acl_id))
+                        cursor.execute(sqlite_update, (get_utc_now(), action, get_ansible_comment(), acl_id))
                         
                         # Update host group association if changed
                         if existing['host_group'] != host_group:
@@ -346,10 +396,10 @@ def addHostGroup(path, group):
             else:
                 print('Adding '+ group)
                 sqlite_insert_with_param = """INSERT INTO 'host_groups'
-                                  ('created_at', 'updated_at', 'name') 
-                                  VALUES (?, ?, ?);"""
+                                  ('created_at', 'updated_at', 'name', 'comment') 
+                                  VALUES (?, ?, ?, ?);"""
 
-                data_tuple = (datetime.datetime.now(), datetime.datetime.now(), group)
+                data_tuple = (get_utc_now(), get_utc_now(), group, get_ansible_comment())
                 cursor.execute(sqlite_insert_with_param, data_tuple)
                 conn.commit()
                 print("Host added successfully \n")
@@ -396,10 +446,10 @@ def manageHostGroups(path, groups_list):
                     print(f'Adding host group: {group}')
                     # Insert group
                     sqlite_insert_with_param = """INSERT INTO 'host_groups'
-                                      ('created_at', 'updated_at', 'name') 
-                                      VALUES (?, ?, ?);"""
+                                      ('created_at', 'updated_at', 'name', 'comment') 
+                                      VALUES (?, ?, ?, ?);"""
                     
-                    data_tuple = (datetime.datetime.now(), datetime.datetime.now(), group)
+                    data_tuple = (get_utc_now(), get_utc_now(), group, get_ansible_comment())
                     cursor.execute(sqlite_insert_with_param, data_tuple)
                     groups_added += 1
                 else:
@@ -465,10 +515,10 @@ def addUserGroup(path, group):
             else:
                 print('Adding '+ group)
                 sqlite_insert_with_param = """INSERT INTO 'user_groups'
-                                  ('created_at', 'updated_at', 'name') 
-                                  VALUES (?, ?, ?);"""
+                                  ('created_at', 'updated_at', 'name', 'comment') 
+                                  VALUES (?, ?, ?, ?);"""
 
-                data_tuple = (datetime.datetime.now(), datetime.datetime.now(), group)
+                data_tuple = (get_utc_now(), get_utc_now(), group, get_ansible_comment())
                 cursor.execute(sqlite_insert_with_param, data_tuple)
                 conn.commit()
                 print("Host added successfully \n")
@@ -515,10 +565,10 @@ def manageUserGroups(path, groups_list):
                     print(f'Adding user group: {group}')
                     # Insert group
                     sqlite_insert_with_param = """INSERT INTO 'user_groups'
-                                      ('created_at', 'updated_at', 'name') 
-                                      VALUES (?, ?, ?);"""
+                                      ('created_at', 'updated_at', 'name', 'comment') 
+                                      VALUES (?, ?, ?, ?);"""
                     
-                    data_tuple = (datetime.datetime.now(), datetime.datetime.now(), group)
+                    data_tuple = (get_utc_now(), get_utc_now(), group, get_ansible_comment())
                     cursor.execute(sqlite_insert_with_param, data_tuple)
                     groups_added += 1
                 else:
@@ -584,10 +634,10 @@ def addHost(path, host, url):
             else:
                 print('Adding '+ host)
                 sqlite_insert_with_param = """INSERT INTO 'hosts'
-                                  ('created_at', 'updated_at', 'name', 'url') 
-                                  VALUES (?, ?, ?, ?);"""
+                                  ('created_at', 'updated_at', 'name', 'url', 'comment') 
+                                  VALUES (?, ?, ?, ?, ?);"""
 
-                data_tuple = (datetime.datetime.now(), datetime.datetime.now(), host, url)
+                data_tuple = (get_utc_now(), get_utc_now(), host, url, get_ansible_comment())
                 cursor.execute(sqlite_insert_with_param, data_tuple)
                 conn.commit()
                 print("Host added successfully \n")
@@ -597,7 +647,9 @@ def addHost(path, host, url):
 def manageHosts(path, hosts_data):
     """
     Manage hosts. Adds new hosts and removes hosts that are not in the provided list.
-    hosts_data format: "name1:::url1:::key1|||name2:::url2:::key2|||..."
+    hosts_data format: "name1:::url1:::key1:::logging1:::hop1|||name2:::url2:::key2:::logging2:::hop2|||..."
+    If logging is not specified, defaults to 'input'.
+    If hop is not specified, defaults to None (NULL).
     """
     try:
         with get_db_connection(path) as (conn, cursor):
@@ -606,27 +658,32 @@ def manageHosts(path, hosts_data):
             if hosts_data:
                 host_entries = [h.strip() for h in hosts_data.split('|||') if h.strip()]
                 for entry in host_entries:
-                    parts = entry.split(':::', 2)
+                    parts = entry.split(':::', 4)
                     if len(parts) >= 2:
                         hosts.append({
                             'name': parts[0].strip(),
                             'url': parts[1].strip(),
-                            'key': parts[2].strip() if len(parts) == 3 else None
+                            'key': parts[2].strip() if len(parts) >= 3 and parts[2].strip() else None,
+                            'logging': parts[3].strip() if len(parts) >= 4 and parts[3].strip() else 'input',
+                            'hop': parts[4].strip() if len(parts) >= 5 and parts[4].strip() else None
                         })
             
-            # Get existing hosts with their SSH key names
+            # Get existing hosts with their SSH key names, logging settings, and hop
             res_existing = cursor.execute("""
-                SELECT h.id, h.name, h.url, sk.name as key_name
+                SELECT h.id, h.name, h.url, sk.name as key_name, h.logging, hop.name as hop_name
                 FROM hosts h
                 LEFT JOIN ssh_keys sk ON h.ssh_key_id = sk.id
+                LEFT JOIN hosts hop ON h.hop_id = hop.id
             """)
             existing_hosts = {}
             for row in res_existing.fetchall():
-                host_id, host_name, url, key_name = row
+                host_id, host_name, url, key_name, logging, hop_name = row
                 existing_hosts[host_name] = {
                     'id': host_id,
                     'url': url,
-                    'key': key_name
+                    'key': key_name,
+                    'logging': logging,
+                    'hop': hop_name
                 }
             
             hosts_added = 0
@@ -639,6 +696,8 @@ def manageHosts(path, hosts_data):
                 name = host['name']
                 url = host['url']
                 key = host['key']
+                logging = host['logging']
+                hop = host['hop']
                 
                 # Get SSH key ID if key is specified
                 ssh_key_id = None
@@ -650,30 +709,40 @@ def manageHosts(path, hosts_data):
                     else:
                         print(f"Warning: SSH key '{key}' does not exist for host '{name}'")
                 
+                # Get hop ID if hop is specified
+                hop_id = None
+                if hop:
+                    res_hop = cursor.execute("SELECT id FROM hosts WHERE name = ?", (hop,))
+                    hop_row = res_hop.fetchone()
+                    if hop_row:
+                        hop_id = hop_row[0]
+                    else:
+                        print(f"Warning: Hop host '{hop}' does not exist for host '{name}'")
+                
                 if name not in existing_hosts:
                     print(f"Adding host: {name}")
                     # Insert host detail
                     sqlite_insert_with_param = """INSERT INTO 'hosts'
-                                      ('created_at', 'updated_at', 'name', 'url', 'ssh_key_id') 
-                                      VALUES (?, ?, ?, ?, ?);"""
+                                      ('created_at', 'updated_at', 'name', 'url', 'ssh_key_id', 'logging', 'hop_id', 'comment') 
+                                      VALUES (?, ?, ?, ?, ?, ?, ?, ?);"""
                     
-                    data_tuple = (datetime.datetime.now(), datetime.datetime.now(), name, url, ssh_key_id)
+                    data_tuple = (get_utc_now(), get_utc_now(), name, url, ssh_key_id, logging, hop_id, get_ansible_comment())
                     cursor.execute(sqlite_insert_with_param, data_tuple)
                     hosts_added += 1
                 else:
-                    # Check if URL or key changed
+                    # Check if URL, key, logging, or hop changed
                     existing = existing_hosts[name]
                     needs_update = False
                     
-                    if existing['url'] != url or existing['key'] != key:
+                    if existing['url'] != url or existing['key'] != key or existing['logging'] != logging or existing['hop'] != hop:
                         needs_update = True
                     
                     if needs_update:
                         print(f"Updating host: {name}")
                         sqlite_update = """UPDATE 'hosts' 
-                                         SET 'updated_at' = ?, 'url' = ?, 'ssh_key_id' = ?
+                                         SET 'updated_at' = ?, 'url' = ?, 'ssh_key_id' = ?, 'logging' = ?, 'hop_id' = ?, 'comment' = ?
                                          WHERE name = ?;"""
-                        cursor.execute(sqlite_update, (datetime.datetime.now(), url, ssh_key_id, name))
+                        cursor.execute(sqlite_update, (get_utc_now(), url, ssh_key_id, logging, hop_id, get_ansible_comment(), name))
                         hosts_updated += 1
                     else:
                         hosts_unchanged += 1
@@ -753,15 +822,15 @@ def addKey(path, key):
                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);"""
             
             data_tuple = (
-                datetime.datetime.now(), 
-                datetime.datetime.now(), 
+                get_utc_now(), 
+                get_utc_now(), 
                 key,
                 'ed25519',
                 256,
                 fingerprint_formatted,
                 priv_key_bytes.decode('utf-8'),
                 pub_key_bytes.decode('utf-8'),
-                f'Generated by ansible for {key}'
+                get_ansible_comment()
             )
             cursor.execute(sqlite_insert_with_param, data_tuple)
             conn.commit()
@@ -838,15 +907,15 @@ def manageKeys(path, keys_list):
                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);"""
                     
                     data_tuple = (
-                        datetime.datetime.now(), 
-                        datetime.datetime.now(), 
+                        get_utc_now(), 
+                        get_utc_now(), 
                         key,
                         'ed25519',
                         256,
                         fingerprint_formatted,
                         priv_key_bytes.decode('utf-8'),
                         pub_key_bytes.decode('utf-8'),
-                        f'Generated by ansible for {key}'
+                        get_ansible_comment()
                     )
                     cursor.execute(sqlite_insert_key, data_tuple)
                     keys_added += 1
@@ -1010,7 +1079,7 @@ def manageHostGroupAssignments(path, assignments_data):
                     
                     # Update the host's updated_at timestamp
                     cursor.execute("UPDATE hosts SET updated_at = ? WHERE id = ?", 
-                                  (datetime.datetime.now(), host_row[0]))
+                                  (get_utc_now(), host_row[0]))
                     
                     assignments_added += 1
                 else:
@@ -1032,7 +1101,7 @@ def manageHostGroupAssignments(path, assignments_data):
                     
                     # Update the host's updated_at timestamp
                     cursor.execute("UPDATE hosts SET updated_at = ? WHERE id = ?", 
-                                  (datetime.datetime.now(), host_id))
+                                  (get_utc_now(), host_id))
                     
                     assignments_removed += 1
             
@@ -1125,9 +1194,9 @@ def manageUserGroupAssignments(path, assignments_data):
                 group_name = assignment['group']
                 key = f"{user_name}:::{group_name}"
                 
-                # Protect admin user from group assignment changes
-                if user_name == 'admin':
-                    print(f"Skipping assignment for protected user 'admin' to group '{group_name}'")
+                # Protect users from group assignment changes
+                if user_name.lower() in {u.lower() for u in PROTECTED_USERS}:
+                    print(f"Skipping assignment for protected user '{user_name}' to group '{group_name}'")
                     assignments_protected += 1
                     continue
                 
@@ -1156,7 +1225,7 @@ def manageUserGroupAssignments(path, assignments_data):
                     
                     # Update the user's updated_at timestamp
                     cursor.execute("UPDATE users SET updated_at = ? WHERE id = ?", 
-                                  (datetime.datetime.now(), user_row[0]))
+                                  (get_utc_now(), user_row[0]))
                     
                     assignments_added += 1
                 else:
@@ -1172,9 +1241,9 @@ def manageUserGroupAssignments(path, assignments_data):
                     group_id = assignment_data['group_id']
                     user_name, group_name = existing_key.split(':::')
                     
-                    # Protect admin user from group assignment removal
-                    if user_name == 'admin':
-                        print(f"Protecting 'admin' user assignment to group '{group_name}' from removal")
+                    # Protect users from group assignment removal
+                    if user_name.lower() in {u.lower() for u in PROTECTED_USERS}:
+                        print(f"Protecting '{user_name}' user assignment to group '{group_name}' from removal")
                         assignments_protected += 1
                         continue
                     
@@ -1184,7 +1253,7 @@ def manageUserGroupAssignments(path, assignments_data):
                     
                     # Update the user's updated_at timestamp
                     cursor.execute("UPDATE users SET updated_at = ? WHERE id = ?", 
-                                  (datetime.datetime.now(), user_id))
+                                  (get_utc_now(), user_id))
                     
                     assignments_removed += 1
             
@@ -1214,10 +1283,10 @@ def inviteUser(path, name, email, token):
             else:
                 print('Adding '+ name)
                 sqlite_insert_with_param = """INSERT INTO 'users'
-                                  ('created_at', 'updated_at', 'name', 'email', 'invite_token') 
-                                  VALUES (?, ?, ?, ?, ?);"""
+                                  ('created_at', 'updated_at', 'name', 'email', 'invite_token', 'comment') 
+                                  VALUES (?, ?, ?, ?, ?, ?);"""
 
-                data_tuple = (datetime.datetime.now(), datetime.datetime.now(), name, email, token)
+                data_tuple = (get_utc_now(), get_utc_now(), name, email, token, get_ansible_comment())
                 cursor.execute(sqlite_insert_with_param, data_tuple)
                 conn.commit()
                 print("User added successfully \n")
@@ -1227,12 +1296,11 @@ def inviteUser(path, name, email, token):
 def manageUsers(path, users_data):
     """
     Manage users. Adds new users and removes users that are not in the provided list.
-    Protected user 'admin' cannot be deleted or added via this function.
+    Protected users (from --protected-users parameter) cannot be deleted or added via this function.
     Token is optional - if empty or not provided, invite_token will be NULL.
     users_data format: "name1:::email1:::token1|||name2:::email2:::|||name3:::email3:::token3|||..."
     """
-    # Define protected users that should never be deleted or managed
-    PROTECTED_USERS = {'admin'}
+    # Use global protected users list
     
     try:
         with get_db_connection(path) as (conn, cursor):
@@ -1277,10 +1345,10 @@ def manageUsers(path, users_data):
                     print(f"Adding user: {name}")
                     # Insert user detail
                     sqlite_insert_with_param = """INSERT INTO 'users'
-                                      ('created_at', 'updated_at', 'name', 'email', 'invite_token') 
-                                      VALUES (?, ?, ?, ?, ?);"""
+                                      ('created_at', 'updated_at', 'name', 'email', 'invite_token', 'comment') 
+                                      VALUES (?, ?, ?, ?, ?, ?);"""
                     
-                    data_tuple = (datetime.datetime.now(), datetime.datetime.now(), name, email, token)
+                    data_tuple = (get_utc_now(), get_utc_now(), name, email, token, get_ansible_comment())
                     cursor.execute(sqlite_insert_with_param, data_tuple)
                     users_added += 1
                 else:
@@ -1289,9 +1357,9 @@ def manageUsers(path, users_data):
                     if existing_users[name]['email'] != email or existing_token != token:
                         print(f"Updating user: {name}")
                         sqlite_update = """UPDATE 'users' 
-                                         SET 'updated_at' = ?, 'email' = ?, 'invite_token' = ?
+                                         SET 'updated_at' = ?, 'email' = ?, 'invite_token' = ?, 'comment' = ?
                                          WHERE name = ?;"""
-                        cursor.execute(sqlite_update, (datetime.datetime.now(), email, token, name))
+                        cursor.execute(sqlite_update, (get_utc_now(), email, token, get_ansible_comment(), name))
                         users_added += 1  # Count updates as changes
                     else:
                         users_unchanged += 1
@@ -1343,9 +1411,17 @@ def manageUserKeys(path, user, keys_list):
     """
     Manage SSH public keys for a user. 
     Adds new keys and removes keys that are not in the provided list.
+    Protected users (from --protected-users parameter) will be skipped.
     """
+    # Use global protected users list
+    
     try:
         with get_db_connection(path) as (conn, cursor):
+            # Check if this is a protected user
+            if user.lower() in PROTECTED_USERS:
+                print(f"Skipping key management for protected user '{user}'")
+                return
+            
             # Get user ID
             res_user = cursor.execute("SELECT id FROM users WHERE name = ?", (user,))
             user_row = res_user.fetchone()
@@ -1372,21 +1448,35 @@ def manageUserKeys(path, user, keys_list):
             
             # Add new keys
             for key in keys:
-                if key not in existing_keys:
+                # Ensure key has trailing newline (sshportal CLI adds this)
+                key_with_newline = key if key.endswith('\n') else key + '\n'
+                
+                if key_with_newline not in existing_keys:
                     print(f"Adding key for user '{user}': {key[:50]}...")
-                    sqlite_insert_key = """INSERT INTO 'user_keys'
-                                      ('created_at', 'updated_at', 'user_id', 'authorized_key', 'comment') 
-                                      VALUES (?, ?, ?, ?, ?);"""
                     
-                    data_tuple = (datetime.datetime.now(), datetime.datetime.now(), user_id, key, f"Added by ansible for {user}")
+                    # Convert OpenSSH format to wire format blob
+                    key_blob = parse_openssh_pubkey_to_wire_format(key)
+                    
+                    if key_blob is None:
+                        print(f"Error: Failed to parse SSH key for user '{user}', skipping")
+                        continue
+                    
+                    sqlite_insert_key = """INSERT INTO 'user_keys'
+                                      ('created_at', 'updated_at', 'key', 'user_id', 'authorized_key', 'comment') 
+                                      VALUES (?, ?, ?, ?, ?, ?);"""
+                    
+                    data_tuple = (get_utc_now(), get_utc_now(), key_blob, user_id, key_with_newline, get_ansible_comment())
                     cursor.execute(sqlite_insert_key, data_tuple)
                     keys_added += 1
                 else:
                     keys_unchanged += 1
             
             # Remove keys that are not in the new list
+            # Normalize input keys for comparison (add newline if missing)
+            normalized_input_keys = {k if k.endswith('\n') else k + '\n' for k in keys}
+            
             for existing_key, key_id in existing_keys.items():
-                if existing_key not in keys:
+                if existing_key not in normalized_input_keys:
                     print(f"Removing key for user '{user}': {existing_key[:50]}...")
                     cursor.execute("DELETE FROM user_keys WHERE id = ?", (key_id,))
                     keys_removed += 1
@@ -1394,7 +1484,7 @@ def manageUserKeys(path, user, keys_list):
             # Update the user's updated_at timestamp if any changes were made
             if keys_added > 0 or keys_removed > 0:
                 cursor.execute("UPDATE users SET updated_at = ? WHERE id = ?", 
-                              (datetime.datetime.now(), user_id))
+                              (get_utc_now(), user_id))
             
             conn.commit()
             
@@ -1414,6 +1504,12 @@ def manageUserKeys(path, user, keys_list):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    
+    # Add global optional argument for Ansible controller hostname
+    parser.add_argument('--ansible-host', action='store', dest='ansible_host', help='Ansible controller hostname')
+    
+    # Add global optional argument for protected users list (comma-separated)
+    parser.add_argument('--protected-users', action='store', dest='protected_users', help='Comma-separated list of protected users (default: admin,sshportal)')
 
     subparsers_obj = parser.add_subparsers(dest='subparsers_obj')
     
@@ -1499,5 +1595,13 @@ if __name__ == "__main__":
 
 
     args_obj = vars(parser.parse_args())
+    
+    # Set Ansible controller hostname if provided
+    if args_obj.get('ansible_host'):
+        ANSIBLE_CONTROLLER_HOST = args_obj['ansible_host']
+    
+    # Set protected users list if provided
+    if args_obj.get('protected_users'):
+        PROTECTED_USERS = {u.strip() for u in args_obj['protected_users'].split(',') if u.strip()}
 
     switch(args_obj['subparsers_obj'], args_obj)
